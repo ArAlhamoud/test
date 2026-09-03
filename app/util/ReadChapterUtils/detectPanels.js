@@ -268,15 +268,28 @@ export function detectPanelsFromGray({ gray, w, h, nw, nh }, { direction = "rtl"
     const maxTrim = 0.14;
     const rowInk = (y, a, b) => { let c = 0; const base = y * w; for (let x = a; x < b; x++) c += ink[base + x]; return c / Math.max(1, b - a); };
     const colInk = (x, a, b) => { let c = 0; for (let y = a; y < b; y++) c += ink[y * w + x]; return c / Math.max(1, b - a); };
-    const isFrame = (r) => r >= 0.7 || r <= 0.012;
+    // Only near-solid lines count as frame (scan borders, title bands); dark artwork
+    // that bleeds to the page edge (0.7-0.95 ink) must stay part of its panel.
+    const isFrame = (r) => r >= 0.96 || r <= 0.012;
     const scan = (limit, at) => {
       let i = 0, bursts = 0;
+      const maxSolid = Math.max(3, Math.round(limit / maxTrim * 0.025));
       while (i < limit) {
-        if (isFrame(at(i))) { i++; continue; }
+        const r = at(i);
+        if (r <= 0.012) { i++; continue; } // blank margin
+        if (r >= 0.96) {
+          // solid band: thin ones are scan borders; thick ones are only frame when a
+          // blank margin follows (title band), otherwise it is black art bleeding to the edge
+          let j = i;
+          while (j < limit && at(j) >= 0.96) j++;
+          if (j - i > maxSolid && (j >= limit || at(j) > 0.012)) break;
+          i = j;
+          continue;
+        }
         let j = i;
         while (j < limit && !isFrame(at(j))) j++;
         // a short burst of "content" inside a solid band (white title on black) is still frame
-        if (j - i > Math.max(4, limit * 0.25) || j >= limit || at(j) < 0.7 || bursts++ > 3) break;
+        if (j - i > Math.max(4, limit * 0.25) || j >= limit || at(j) < 0.96 || bursts++ > 3) break;
         i = j;
       }
       return i;

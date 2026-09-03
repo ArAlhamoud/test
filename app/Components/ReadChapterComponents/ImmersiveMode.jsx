@@ -111,7 +111,7 @@ function humanize(text) {
   return t;
 }
 
-function splitForSpeech(text, max = 180) {
+function splitForSpeech(text, max = 260) {
   const parts = text.match(/[^.!?…]+[.!?…]*\s*/g) || [text];
   const chunks = [];
   let cur = "";
@@ -135,6 +135,8 @@ function wait(ms) {
  * Speak one chunk. Resolves with {why, error}. Never hangs: if the engine never
  * even starts within 3s we give up on it, and long chunks have a generous guard.
  */
+let speechProven = false; // set once any utterance actually started
+
 function speakChunk(text, { voice, lang, rate }) {
   return new Promise((resolve) => {
     if (typeof window === "undefined" || !window.speechSynthesis || !text) return resolve({ why: "unsupported" });
@@ -157,13 +159,15 @@ function speakChunk(text, { voice, lang, rate }) {
     u.pitch = 1;
     u.onstart = () => {
       started = true;
+      speechProven = true;
       clearTimeout(startGuard);
       const words = text.split(/\s+/).length;
       endGuard = setTimeout(() => finish("timeout"), (words * 600) / rate + 3000);
     };
     u.onend = () => finish(started ? "end" : "end-without-start");
     u.onerror = (e) => finish("error", e?.error || "unknown");
-    startGuard = setTimeout(() => finish("nostart"), 3000);
+    // Cloud-backed voices (Edge "Natural") may need several seconds before audio starts.
+    startGuard = setTimeout(() => finish("nostart"), speechProven ? 6000 : 12000);
     try {
       const go = () => synth.speak(u);
       if (synth.speaking || synth.pending) {
@@ -609,7 +613,7 @@ export default function ImmersiveMode({
               break;
             } else if (r.why === "nostart" || r.why === "unsupported" || r.why === "end-without-start" || r.why === "error") {
               setSpeechIssue((prev) => prev || (r.why === "error" ? `error: ${r.error}` : "silent"));
-              engineDead = true;
+              engineDead = true; // skip the rest of this panel's audio; the next panel tries again
               break;
             }
           }
@@ -940,7 +944,7 @@ export default function ImmersiveMode({
             <span>
               {speechIssue === "not-allowed"
                 ? "Your browser blocked audio until you interact with the page. Click anywhere to start narration."
-                : "Narration isn't producing sound in this browser (subtitles still work). Try another voice in Settings, or use Edge/Chrome."}
+                : "Narration isn't producing sound yet (subtitles still work). It keeps retrying; if it stays silent, pick another voice in Settings (S) and press Test voice."}
             </span>
           </div>
         </div>
@@ -1152,7 +1156,9 @@ export default function ImmersiveMode({
                 <button
                   onClick={async () => {
                     setSpeechIssue("");
+                    setStatusText("Testing voice… (cloud voices can take a few seconds)");
                     const r = await speakChunk("Immersive mode narration test. If you can hear this, narration works.", { voice: selectedVoice, lang: language, rate: settings.rate });
+                    setStatusText("");
                     if (r.why !== "end") setSpeechIssue(r.why === "error" ? `error: ${r.error}` : r.why === "nostart" ? "silent" : r.why);
                   }}
                   className="px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-xs font-semibold whitespace-nowrap"
