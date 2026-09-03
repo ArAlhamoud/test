@@ -17,6 +17,14 @@ npm run dev
 Open http://localhost:3000 in your browser (Chrome or Edge recommended — see
 voice notes below).
 
+`npm run dev` is the development server: convenient, but every page is
+compiled on demand, so it feels slow. For reading, run the optimized build
+instead (takes a couple of minutes the first time, then starts instantly):
+
+```bash
+npm run play
+```
+
 ## Immersive Mode — the "manga edit" experience, live 🎬
 
 This is the mode to use if you want reading to feel like those animated
@@ -47,9 +55,20 @@ with no text stay on screen for a few seconds (adjustable) before moving on.
 | F | Fullscreen |
 | Esc | Exit (returns you to the page you were on) |
 
-The gear icon opens settings: voice, narration speed, seconds per silent
-panel, reading direction, sound effects. Subtitles and the spotlight dimming can
-be toggled from the bar. Settings are remembered.
+The gear icon (or **S**) opens settings in four groups: Narration (voice, a
+"Test voice" button, speed, seconds per silent panel, subtitle style), Camera
+(framing, reading direction, impact cuts), Look (letterbox bars, film grain,
+spotlight, sound effects) and Diagnostics. Press **?** for the shortcut list.
+Settings are remembered.
+
+**Effects:** panels with big sound-effect lettering get an impact cut (hard cut,
+white flash, shake, speed lines); panels with "!" get a punch-in; everything
+else glides. The 🎞 button toggles the cinematic look (letterbox + grain).
+
+**If narration is silent**, open Settings → Diagnostics. It shows whether the
+text detection (OCR) succeeded for the page and whether the browser's speech
+engine produced sound, and the reason when either failed. "Test voice" plays a
+sample sentence. If the browser blocked audio, a banner asks for one click.
 
 **Tips**
 - Use Chrome or Edge; Edge's "Natural" voices sound best. Pick the voice in the

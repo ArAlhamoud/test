@@ -177,8 +177,22 @@ export async function GET() {
             });
 
         } catch (error: any) {
-            console.error(`Attempt ${attempt} failed:`, error.message);
             await cleanup();
+
+            // No browser installed locally (we skip Puppeteer's Chrome download): the forum
+            // feed is optional, so bail out quietly instead of retrying and spamming the log.
+            if (/Could not find (Chrome|browser)|Browser was not found|executablePath/i.test(error.message || '')) {
+                console.info('Forum activity feed skipped: no local Chrome for the scraper (this is fine).');
+                return NextResponse.json({
+                    data: [],
+                    total: 0,
+                    timestamp: new Date().toISOString(),
+                    source: 'MangaDex Forums Latest Activity',
+                    disabled: true,
+                });
+            }
+
+            console.error(`Attempt ${attempt} failed:`, error.message);
 
             if (attempt === maxRetries) {
                 return NextResponse.json(

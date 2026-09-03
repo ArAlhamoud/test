@@ -3,6 +3,7 @@
 import { NextResponse, NextRequest } from "next/server";
 import path from "path";
 import fs from "fs";
+import os from "os";
 import sharp from "sharp";
 import OcrWrapper from "../../../scripts/index.js"; // Updated import
 
@@ -193,7 +194,7 @@ async function enhanceImageForOCR(inputBuffer: Buffer): Promise<ProcessedImage> 
     })
     .toBuffer();
 
-  const uploadDir = "/tmp";
+  const uploadDir = os.tmpdir(); // cross-platform (Windows has no /tmp)
   if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
   const imagePath = path.join(uploadDir, `ocr_enhanced_${Date.now()}.jpg`);
   fs.writeFileSync(imagePath, processedBuffer);
