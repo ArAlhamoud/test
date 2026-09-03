@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams, useRouter } from 'next/navigation';
 import { ArrowUp } from 'lucide-react';
 import { useManga } from '../../../../../../providers/MangaContext';
@@ -13,6 +14,7 @@ import { useTheme } from '@/app/providers/ThemeContext';
 import GOTONextChapterPopUpAtLastPage from '../../../../../../Components/ReadChapterComponents/GOTONextChapterPopUpAtLastPage';
 import SidebarSkeleton from '../../../../../../Components/Skeletons/ReadChapter/SidebarSkeleton'; // Adjust path as needed
 import ContentSkeleton from '../../../../../../Components/Skeletons/ReadChapter/ContentSkeleton'; // Adjust path as needed
+import ImmersiveMode, { IMMERSIVE_RESUME_KEY } from '../../../../../../Components/ReadChapterComponents/ImmersiveMode';
 
 const SideBar = memo(_SideBar);
 const MiddleImageAndOptions = memo(_MiddleImageAndOptions);
@@ -38,6 +40,7 @@ export default function ReadChapter() {
   const [quality, setQuality] = useState("low");
   const [showTranslationAndSpeakingOptions, setShowTranslationAndSpeakingOptions] = useState(true);
   const [showTranslationTextOverlay, setShowTranslationTextOverlay] = useState(true);
+  const [immersive, setImmersive] = useState(false);
 
   // Add state for selected language from sidebar
   const [selectedLanguage, setSelectedLanguage] = useState('');
@@ -58,6 +61,33 @@ export default function ReadChapter() {
       setSelectedLanguage(chapterInfo.translatedLanguage);
     }
   }, [chapterInfo, selectedLanguage]);
+
+  // Immersive mode: resume automatically after an auto "next chapter" jump, and open with the "I" key.
+  useEffect(() => {
+    try {
+      if (window.sessionStorage.getItem(IMMERSIVE_RESUME_KEY)) {
+        window.sessionStorage.removeItem(IMMERSIVE_RESUME_KEY);
+        setImmersive(true);
+      }
+    } catch { /* ignore */ }
+  }, [chapterId]);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      const tag = e.target?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
+      if ((e.key === 'i' || e.key === 'I') && !e.ctrlKey && !e.metaKey && !e.altKey) setImmersive(true);
+    };
+    if (immersive) return undefined;
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [immersive]);
+
+  const openImmersive = useCallback(() => setImmersive(true), []);
+  const closeImmersive = useCallback((pageIndex) => {
+    setImmersive(false);
+    if (typeof pageIndex === 'number' && !Number.isNaN(pageIndex)) setCurrentIndex(pageIndex);
+  }, []);
 
   // Responsive collapsed state based on screen width < 500px
   useEffect(() => {
@@ -266,6 +296,7 @@ export default function ReadChapter() {
           >
             {settingsOpen && <TopRightOptions
               isDark={isDark}
+              onImmersive={openImmersive}
               allAtOnce={allAtOnce}
               quality={quality}
               isCollapsed={isCollapsed}
@@ -365,6 +396,19 @@ export default function ReadChapter() {
         )
       ) : (
         <ContentSkeleton isDark={isDark} />
+      )}
+      {immersive && chapterInfo && pages && !emptyPages && typeof document !== 'undefined' && createPortal(
+        <ImmersiveMode
+          key={chapterId}
+          pages={pages?.chapter?.data?.length ? pages.chapter.data : pages?.chapter?.dataSaver || []}
+          startIndex={currentIndex}
+          chapterInfo={chapterInfo}
+          mangaInfo={selectedMemoManga}
+          onExit={closeImmersive}
+          goToNextChapter={goToNextChapter}
+          hasNextChapter={hasNextChapter}
+        />,
+        document.body
       )}
     </div>
   );

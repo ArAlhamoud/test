@@ -17,6 +17,51 @@ npm run dev
 Open http://localhost:3000 in your browser (Chrome or Edge recommended — see
 voice notes below).
 
+## Immersive Mode — the "manga edit" experience, live 🎬
+
+This is the mode to use if you want reading to feel like those animated
+manga edits: a camera that glides from panel to panel, everything outside the
+current panel dimmed, the dialogue read aloud with subtitles, a whoosh on each
+cut and a title card per chapter — generated on the fly, no videos to make.
+
+1. Open any chapter in the reader.
+2. Click the 🎬 clapperboard button (top-right toolbar) or press **I**.
+3. Sit back. It plays automatically: panel → panel → next page → next chapter.
+
+**What happens under the hood:** each page is analysed in your browser to find
+the panel boundaries (white or black gutters), then the camera frames each panel
+in reading order (right-to-left for manga, left-to-right for manhwa/comics — it
+auto-detects, and you can override it in the settings). If narration is on, the
+page text is extracted by the built-in OCR engine, matched to its panel, and
+read by your browser's voice while the sentence is shown as a subtitle. Panels
+with no text stay on screen for a few seconds (adjustable) before moving on.
+
+**Controls**
+
+| Key / button | Action |
+|---|---|
+| Space, or click anywhere | Play / pause |
+| ← / → | Previous / next panel |
+| ↑ / ↓ | Previous / next page |
+| N | Toggle narration |
+| F | Fullscreen |
+| Esc | Exit (returns you to the page you were on) |
+
+The gear icon opens settings: voice, narration speed, seconds per silent
+panel, reading direction, sound effects. Subtitles and the spotlight dimming can
+be toggled from the bar. Settings are remembered.
+
+**Tips**
+- Use Chrome or Edge; Edge's "Natural" voices sound best. Pick the voice in the
+  gear menu — the list depends on your OS/browser.
+- The first page of a session takes a few extra seconds while the OCR engine
+  warms up; after that the next page's text is prepared in the background.
+- Panel detection works on pages with clean gutters. Full-bleed art or pages
+  with no gutters are shown as one shot; very tall webtoon panels are split
+  into scrolling shots automatically.
+- Narration reads the text in the chapter's language — open an English chapter
+  for English narration.
+
 ## Listen Mode — manga read aloud to you
 
 1. Browse or search (`Ctrl+K` / `Cmd+K`) for a manga and open a chapter.

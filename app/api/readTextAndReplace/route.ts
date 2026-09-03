@@ -6,6 +6,9 @@ import fs from "fs";
 import sharp from "sharp";
 import OcrWrapper from "../../../scripts/index.js"; // Updated import
 
+// OCR can take a while on a cold start; allow up to 60s on serverless hosts (Vercel).
+export const maxDuration = 60;
+
 // Interfaces for OCR response
 export interface OCRResult {
   bbox: number[][];

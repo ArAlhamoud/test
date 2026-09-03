@@ -1,6 +1,6 @@
 // TopRightOptions.jsx
 import React, { useState, useCallback, useMemo } from 'react'
-import { Settings, BookOpen, Maximize2, Heart } from 'lucide-react'
+import { Settings, BookOpen, Maximize2, Heart, Clapperboard } from 'lucide-react'
 import { useManga } from '../../providers/MangaContext'
 import ShowSettingsPopUP from "./TopRightOptionsModules/ShowSettingsPopUp"
 import ChapterQuickSelect from "./TopRightOptionsModules/ChapterQuickSelect"
@@ -24,6 +24,7 @@ function TopRightOptions({
     setShowTranslationAndSpeakingOptions,
     showTranslationTextOverlay,
     setShowTranslationTextOverlay,
+    onImmersive,
 }) {
     const [showSettings, setShowSettings] = useState(false)
     const [showChapters, setShowChapters] = useState(false)
@@ -84,6 +85,23 @@ function TopRightOptions({
         <div className="fixed scale-75 sm:scale-100 top-16 right-0 sm:top-24 sm:right-5 z-50">
             {/* Floating Controls */}
             <div className="flex gap-3 mb-4">
+                {onImmersive && (
+                    <button
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            e.nativeEvent?.stopImmediatePropagation();
+                            onImmersive();
+                        }}
+                        className={`border rounded-xl p-3 transition-all duration-200 hover:-translate-y-0.5 backdrop-blur-md ${isDark
+                            ? "bg-violet-600/80 border-violet-300/40 text-white hover:bg-violet-500 shadow-lg shadow-violet-900/40"
+                            : "bg-violet-500 border-violet-300 text-white hover:bg-violet-400 shadow-lg shadow-violet-300/50"
+                            }`}
+                        title="Immersive mode: panel-by-panel camera + narration (I)"
+                    >
+                        <Clapperboard size={16} />
+                    </button>
+                )}
                 <button
                     onClick={(e) => {
                         e.stopPropagation();
