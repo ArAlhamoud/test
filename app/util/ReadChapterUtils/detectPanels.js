@@ -1,37 +1,35 @@
 /**
  * Manga panel detection in pure JavaScript (no OpenCV needed).
  *
- * Strategy: recursive XY-cut. The page is down-scaled onto a canvas, every pixel
- * is classified as "ink" or "background" (white gutters, or black gutters for
- * dark-bordered pages), and the page is split recursively along full-width /
- * full-height background gutters. Leaves of the cut tree are the panels, and the
- * traversal order of the tree *is* the reading order (rows top-to-bottom,
- * columns right-to-left for manga or left-to-right for manhwa / comics).
+ * Strategy: recursive XY-cut. The page is down-scaled, every pixel is classified
+ * as "ink" or "background" (relative to the page's own paper tone, white or
+ * black), and the page is split recursively along separators that span the
+ * region: white gutters, or thin full-width black lines (layouts that draw a
+ * single border between panels instead of leaving a gap). Scan borders and
+ * margin text are ignored. Leaves of the cut tree are the panels, and the tree
+ * order *is* the reading order (rows top-to-bottom, columns right-to-left for
+ * manga or left-to-right for manhwa / comics).
  *
- * Returns an array of rects `{ x, y, w, h }` in the image's natural pixel space.
+ * Returns rects `{ x, y, w, h }` in the image's natural pixel space.
  */
 
-const ANALYSIS_WIDTH = 640;
+const ANALYSIS_WIDTH = 800;
 
 function fullPage(nw, nh) {
   return [{ x: 0, y: 0, w: nw, h: nh }];
 }
 
 /**
- * @param {HTMLImageElement} imgEl  A fully loaded, same-origin image element.
- * @param {object} opts
- * @param {"rtl"|"ltr"} opts.direction  Column reading direction.
- * @param {number} opts.maxAspect  Panels taller than `maxAspect * width` are split into scrolling "shots".
+ * Browser entry point.
+ * @param {HTMLImageElement} imgEl  A fully loaded, pixel-readable image element.
  */
-export function detectPanels(imgEl, { direction = "rtl", maxAspect = 2.2 } = {}) {
+export function detectPanels(imgEl, opts = {}) {
   const nw = imgEl?.naturalWidth || 0;
   const nh = imgEl?.naturalHeight || 0;
   if (!nw || !nh) return [];
-
   const scale = Math.min(1, ANALYSIS_WIDTH / nw);
   const w = Math.max(1, Math.round(nw * scale));
   const h = Math.max(1, Math.round(nh * scale));
-
   let data;
   try {
     const canvas = document.createElement("canvas");
@@ -41,162 +39,259 @@ export function detectPanels(imgEl, { direction = "rtl", maxAspect = 2.2 } = {})
     ctx.drawImage(imgEl, 0, 0, w, h);
     data = ctx.getImageData(0, 0, w, h).data;
   } catch (err) {
-    // Tainted canvas (cross-origin image) or similar: fall back to the whole page.
     console.warn("detectPanels: cannot read pixels, using full page", err);
     return fullPage(nw, nh);
   }
-
-  // Grayscale
   const gray = new Uint8Array(w * h);
   for (let i = 0, j = 0; i < gray.length; i++, j += 4) {
     gray[i] = (data[j] * 77 + data[j + 1] * 151 + data[j + 2] * 28) >> 8;
   }
+  return detectPanelsFromGray({ gray, w, h, nw, nh }, opts);
+}
 
-  // Estimate the page background from the outer border (white or black gutters).
+/**
+ * Pure core (also usable from Node with any decoder).
+ * @param {{gray: Uint8Array, w: number, h: number, nw: number, nh: number}} img  Down-scaled grayscale + natural size.
+ * @param {object} opts
+ * @param {"rtl"|"ltr"} opts.direction  Column reading direction.
+ * @param {number} opts.maxAspect  Panels taller than `maxAspect * width` become scrolling "shots".
+ */
+export function detectPanelsFromGray({ gray, w, h, nw, nh }, { direction = "rtl", maxAspect = 2.2, bleedGutters = false, debug = null } = {}) {
+  if (!w || !h || !nw || !nh) return [];
+  const scale = w / nw;
+
+  /* ---- paper tone: pick the dominant bright (or dark) level ---- */
+  const hist = new Int32Array(256);
+  for (let i = 0; i < gray.length; i++) hist[gray[i]]++;
+  let brightMode = 255, brightMax = -1, darkMode = 0, darkMax = -1;
+  for (let v = 0; v < 256; v++) {
+    if (v >= 140 && hist[v] > brightMax) { brightMax = hist[v]; brightMode = v; }
+    if (v <= 115 && hist[v] > darkMax) { darkMax = hist[v]; darkMode = v; }
+  }
   const border = Math.max(2, Math.round(Math.min(w, h) * 0.02));
-  let sum = 0;
-  let count = 0;
+  let sum = 0, count = 0;
   for (let y = 0; y < h; y++) {
     const edgeRow = y < border || y >= h - border;
     for (let x = 0; x < w; x++) {
-      if (edgeRow || x < border || x >= w - border) {
-        sum += gray[y * w + x];
-        count++;
-      }
+      if (edgeRow || x < border || x >= w - border) { sum += gray[y * w + x]; count++; }
     }
   }
-  const bgIsDark = count > 0 && sum / count < 90;
-
-  // Ink mask
+  const bgIsDark = count > 0 && sum / count < 90 && darkMax > 0;
   const ink = new Uint8Array(w * h);
   if (bgIsDark) {
-    for (let i = 0; i < gray.length; i++) ink[i] = gray[i] > 70 ? 1 : 0;
+    const t = Math.min(darkMode + 55, 120);
+    for (let i = 0; i < gray.length; i++) ink[i] = gray[i] > t ? 1 : 0;
   } else {
-    for (let i = 0; i < gray.length; i++) ink[i] = gray[i] < 200 ? 1 : 0;
+    // JPEG ringing around black lines is ~200-230 gray; keep it out of "ink".
+    const t = Math.max(150, Math.min(brightMode - 55, 200));
+    for (let i = 0; i < gray.length; i++) ink[i] = gray[i] < t ? 1 : 0;
   }
 
-  const minGutter = Math.max(3, Math.round(w * 0.008));
+  const minGutter = Math.max(3, Math.round(w * 0.005));
   const minPanelW = Math.round(w * 0.06);
   const minPanelH = Math.round(h * 0.03);
   const leaves = [];
 
-  function projection(region, axis) {
+  /**
+   * Per-line stats along `axis` inside `region`: `proj` = ink count per row/col,
+   * `cov3` = breadth positions covered by ink in this line or its two neighbours
+   * (catches thin, slightly slanted or broken drawn lines). At page level a small
+   * margin is ignored on each side (page numbers, credits, scan noise).
+   */
+  function stats(region, axis, depth) {
     const { x0, y0, x1, y1 } = region;
-    if (axis === "rows") {
-      const proj = new Int32Array(y1 - y0);
-      for (let y = y0; y < y1; y++) {
-        let c = 0;
-        const base = y * w;
-        for (let x = x0; x < x1; x++) c += ink[base + x];
-        proj[y - y0] = c;
+    const marginFrac = depth === 0 ? 0.03 : 0;
+    const rows = axis === "rows";
+    const length = rows ? y1 - y0 : x1 - x0;
+    const m = Math.round((rows ? x1 - x0 : y1 - y0) * marginFrac);
+    const a = (rows ? x0 : y0) + m;
+    const b = (rows ? x1 : y1) - m;
+    const breadth = Math.max(1, b - a);
+    const proj = new Int32Array(length);
+    const cov3 = new Int32Array(length);
+    const gap = new Int32Array(length); // longest uninterrupted background stretch
+    const at = (i, p) => (rows ? ink[(y0 + i) * w + p] : ink[p * w + (x0 + i)]);
+    for (let i = 0; i < length; i++) {
+      let c = 0, cv = 0, run = 0, best = 0;
+      const hasPrev = i > 0, hasNext = i + 1 < length;
+      for (let p = a; p < b; p++) {
+        const v = at(i, p);
+        c += v;
+        if (v) { run = 0; } else { run++; if (run > best) best = run; }
+        if (v || (hasPrev && at(i - 1, p)) || (hasNext && at(i + 1, p))) cv++;
       }
-      return proj;
+      proj[i] = c;
+      cov3[i] = cv;
+      gap[i] = best;
     }
-    const proj = new Int32Array(x1 - x0);
-    for (let x = x0; x < x1; x++) {
-      let c = 0;
-      for (let y = y0; y < y1; y++) c += ink[y * w + x];
-      proj[x - x0] = c;
-    }
-    return proj;
+    return { proj, cov3, gap, breadth, length };
   }
 
-  // Split a region along `axis` at background gutters. Returns null when no valid cut exists.
-  function split(region, axis) {
-    const { x0, y0, x1, y1 } = region;
-    const length = axis === "rows" ? y1 - y0 : x1 - x0;
-    const breadth = axis === "rows" ? x1 - x0 : y1 - y0;
-    if (length < 2 * (axis === "rows" ? minPanelH : minPanelW)) return null;
+  /**
+   * Split a region along `axis`. Separators are runs of background (white gutters)
+   * at least `minGutter` long or, when `allowLines`, thin drawn lines that span the
+   * breadth and are bordered by light rows on both sides. Runs touching the region
+   * edge are trimmed. Returns { parts, byLine } | { trimmed } | null.
+   */
+  function split(region, axis, depth, allowLines) {
+    const minPart = axis === "rows" ? minPanelH : minPanelW;
+    const { proj, cov3, gap, breadth, length } = stats(region, axis, depth);
+    if (length < 2 * minPart) return null;
+    // Page level tolerates lettering that crosses a gutter; deeper levels are strict.
+    const bgThr = Math.max(1, Math.floor(breadth * (depth === 0 ? 0.012 : 0.005)));
+    const pageDim = axis === "rows" ? h : w;
+    const maxLine = Math.max(2, Math.round(pageDim * 0.012));
+    const light = (i) => i < 0 || i >= length || proj[i] < breadth * 0.5;
 
-    const proj = projection(region, axis);
-    const thr = Math.max(1, Math.floor(breadth * 0.006));
-    const bg = new Uint8Array(length);
-    for (let i = 0; i < length; i++) bg[i] = proj[i] <= thr ? 1 : 0;
+    const cls = new Uint8Array(length); // 0 content, 1 background, 2 line candidate
+    for (let i = 0; i < length; i++) {
+      // At page level a gutter crossed by lettering or hair still shows as a long
+      // uninterrupted white stretch with little ink overall.
+      const bg = proj[i] <= bgThr || (bleedGutters && depth === 0 && gap[i] >= breadth * 0.6 && proj[i] <= breadth * 0.25);
+      cls[i] = bg ? 1 : allowLines && cov3[i] >= breadth * 0.75 ? 2 : 0;
+    }
+    // A drawn line must be thin and bordered by light lines; otherwise it is dark art.
+    if (allowLines) {
+      let i = 0;
+      while (i < length) {
+        if (cls[i] !== 2) { i++; continue; }
+        let j = i;
+        while (j < length && cls[j] === 2) j++;
+        let ok = j - i <= maxLine;
+        if (ok) {
+          // walk outward past background lines to the first content line on each side
+          let up = i - 1; while (up >= 0 && cls[up] === 1) up--;
+          let dn = j; while (dn < length && cls[dn] === 1) dn++;
+          ok = light(up) && light(dn);
+        }
+        if (!ok) for (let k = i; k < j; k++) cls[k] = 0;
+        i = j;
+      }
+    }
 
-    // Collect maximal runs of background.
     const runs = [];
     let i = 0;
     while (i < length) {
-      if (!bg[i]) {
-        i++;
-        continue;
-      }
-      let j = i;
-      while (j < length && bg[j]) j++;
-      runs.push([i, j]);
+      if (!cls[i]) { i++; continue; }
+      let j = i, bg = 0, line = 0;
+      while (j < length && cls[j]) { if (cls[j] === 1) bg++; else line++; j++; }
+      runs.push({ a: i, b: j, bg, line });
       i = j;
     }
     if (!runs.length) return null;
+    if (debug && depth <= 1) debug.push({ depth, axis, region: `${region.x0},${region.y0}-${region.x1},${region.y1}`, breadth, bgThr, runs: runs.map((r) => `${r.a}-${r.b}(bg${r.bg}/ln${r.line})`).join(" ") });
 
-    // Segments of content between background runs (treat edge runs as trimming).
+    // A gap narrower than `minGutter` still counts when solid border lines flank it
+    // (tight layouts); gaps inside artwork have no such borders.
+    const solidNear = (from, dir) => {
+      for (let k = 1; k <= 3; k++) {
+        const i = from + dir * k;
+        if (i < 0 || i >= length) return false;
+        if (proj[i] >= breadth * 0.6) return true;
+      }
+      return false;
+    };
     const segments = [];
     let cursor = 0;
-    for (const [a, b] of runs) {
-      const isEdge = a === 0 || b === length;
-      const isGutter = b - a >= minGutter;
-      if (!isEdge && !isGutter) continue;
-      if (a > cursor) segments.push([cursor, a]);
-      cursor = b;
+    let usedLine = false;
+    for (const r of runs) {
+      const isEdge = r.a === 0 || r.b === length;
+      const gutter = r.bg >= minGutter || (r.bg >= 2 && r.line === 0 && solidNear(r.a, -1) && solidNear(r.b - 1, 1));
+      const drawn = !gutter && r.line > 0;
+      if (!isEdge && !gutter && !drawn) continue;
+      if (!isEdge && drawn) usedLine = true;
+      if (r.a > cursor) segments.push({ s: cursor, e: r.a });
+      cursor = r.b;
     }
-    if (cursor < length) segments.push([cursor, length]);
+    if (cursor < length) segments.push({ s: cursor, e: length });
 
-    const minPart = axis === "rows" ? minPanelH : minPanelW;
-    // Merge undersized segments into their neighbour so text specks in gutters don't create slivers.
+    // Merge undersized segments into a neighbour, then shrink every segment to its
+    // content so swallowed separators do not pollute the next projection.
+    const need = usedLine ? Math.max(minPart, Math.round(pageDim * 0.08)) : minPart;
     const merged = [];
     for (const seg of segments) {
-      if (merged.length && (seg[1] - seg[0] < minPart)) {
-        merged[merged.length - 1][1] = seg[1];
-      } else if (merged.length && merged[merged.length - 1][1] - merged[merged.length - 1][0] < minPart) {
-        merged[merged.length - 1][1] = seg[1];
-      } else {
-        merged.push([seg[0], seg[1]]);
-      }
+      const last = merged[merged.length - 1];
+      if (last && (seg.e - seg.s < need || last.e - last.s < need)) last.e = seg.e;
+      else merged.push({ ...seg });
     }
-    if (merged.length < 2) {
-      // No cut, but we may still have trimmed empty margins.
-      if (merged.length === 1 && (merged[0][0] > 0 || merged[0][1] < length)) {
-        return { trimmed: toRegion(region, axis, merged[0]) };
-      }
+    // Shrink every segment past separators and past its own border lines (near-solid
+    // rows/cols), so they do not leak ink into the projection on the other axis.
+    const solid = (i) => proj[i] >= breadth * 0.55;
+    for (const seg of merged) {
+      let guard = 0;
+      while (seg.s < seg.e && (cls[seg.s] || (solid(seg.s) && guard++ < 12))) seg.s++;
+      guard = 0;
+      while (seg.e > seg.s && (cls[seg.e - 1] || (solid(seg.e - 1) && guard++ < 12))) seg.e--;
+    }
+    const kept = merged.filter((seg) => seg.e - seg.s >= minPart);
+    if (kept.length < 2) {
+      const one = kept[0] || merged[0];
+      if (one && (one.s > 0 || one.e < length)) return { trimmed: toRegion(region, axis, one) };
       return null;
     }
-    return { parts: merged.map((seg) => toRegion(region, axis, seg)) };
+    return { parts: kept.map((seg) => toRegion(region, axis, seg)), byLine: usedLine };
   }
 
-  function toRegion(region, axis, [a, b]) {
+  function toRegion(region, axis, { s, e }) {
     return axis === "rows"
-      ? { x0: region.x0, y0: region.y0 + a, x1: region.x1, y1: region.y0 + b }
-      : { x0: region.x0 + a, y0: region.y0, x1: region.x0 + b, y1: region.y1 };
+      ? { x0: region.x0, y0: region.y0 + s, x1: region.x1, y1: region.y0 + e }
+      : { x0: region.x0 + s, y0: region.y0, x1: region.x0 + e, y1: region.y1 };
   }
 
   function orderParts(parts, axis) {
-    if (axis === "rows") return parts; // top to bottom
+    if (axis === "rows") return parts;
     return direction === "rtl" ? [...parts].reverse() : parts;
   }
 
-  function recurse(region, axis, depth) {
-    if (depth > 8) {
-      leaves.push(region);
-      return;
-    }
-    const first = split(region, axis);
+  // `lineMode`: drawn lines count as separators at page level only (inside a tier they
+  // would cut on black hair and other solid art).
+  function recurse(region, axis, depth, lineMode) {
+    if (depth > 8) { leaves.push(region); return; }
+    const other = axis === "rows" ? "cols" : "rows";
+    const first = split(region, axis, depth, lineMode);
     if (first?.parts) {
-      const other = axis === "rows" ? "cols" : "rows";
-      for (const part of orderParts(first.parts, axis)) recurse(part, other, depth + 1);
+      for (const part of orderParts(first.parts, axis)) recurse(part, other, depth + 1, false);
       return;
     }
     const trimmedRegion = first?.trimmed || region;
-    const other = axis === "rows" ? "cols" : "rows";
-    const second = split(trimmedRegion, other);
+    const second = split(trimmedRegion, other, depth, lineMode);
     if (second?.parts) {
-      for (const part of orderParts(second.parts, other)) recurse(part, axis, depth + 1);
+      for (const part of orderParts(second.parts, other)) recurse(part, axis, depth + 1, false);
       return;
     }
     leaves.push(second?.trimmed || trimmedRegion);
   }
 
-  recurse({ x0: 0, y0: 0, x1: w, y1: h }, "rows", 0);
+  /* ---- strip scan borders / blank margins / title bands around the page ---- */
+  function trimFrame() {
+    let x0 = 0, y0 = 0, x1 = w, y1 = h;
+    const maxTrim = 0.14;
+    const rowInk = (y, a, b) => { let c = 0; const base = y * w; for (let x = a; x < b; x++) c += ink[base + x]; return c / Math.max(1, b - a); };
+    const colInk = (x, a, b) => { let c = 0; for (let y = a; y < b; y++) c += ink[y * w + x]; return c / Math.max(1, b - a); };
+    const isFrame = (r) => r >= 0.7 || r <= 0.012;
+    const scan = (limit, at) => {
+      let i = 0, bursts = 0;
+      while (i < limit) {
+        if (isFrame(at(i))) { i++; continue; }
+        let j = i;
+        while (j < limit && !isFrame(at(j))) j++;
+        // a short burst of "content" inside a solid band (white title on black) is still frame
+        if (j - i > Math.max(4, limit * 0.25) || j >= limit || at(j) < 0.7 || bursts++ > 3) break;
+        i = j;
+      }
+      return i;
+    };
+    y0 = scan(Math.floor(h * maxTrim), (i) => rowInk(i, x0, x1));
+    y1 = h - scan(Math.floor(h * maxTrim), (i) => rowInk(h - 1 - i, x0, x1));
+    x0 = scan(Math.floor(w * maxTrim), (i) => colInk(i, y0, y1));
+    x1 = w - scan(Math.floor(w * maxTrim), (i) => colInk(w - 1 - i, y0, y1));
+    if (x1 - x0 < w * 0.5 || y1 - y0 < h * 0.5) return { x0: 0, y0: 0, x1: w, y1: h };
+    return { x0, y0, x1, y1 };
+  }
 
-  // Tight-crop each leaf to its ink, drop empty / tiny leaves.
+  recurse(trimFrame(), "rows", 0, true);
+
+  /* ---- tight-crop leaves to their ink, drop tiny ones ---- */
   const pageArea = w * h;
   const rects = [];
   for (const leaf of leaves) {
@@ -218,10 +313,9 @@ export function detectPanels(imgEl, { direction = "rtl", maxAspect = 2.2 } = {})
     if (rw * rh < pageArea * 0.012 || rw < minPanelW || rh < minPanelH) continue;
     rects.push({ x: minX, y: minY, w: rw, h: rh });
   }
-
   if (!rects.length) return fullPage(nw, nh);
 
-  // Pad, convert to natural coordinates, and split very tall panels into scrolling shots.
+  /* ---- pad, convert to natural coordinates, split very tall wide panels into shots ---- */
   const pad = Math.round(w * 0.012);
   const out = [];
   for (const r of rects) {
@@ -230,13 +324,11 @@ export function detectPanels(imgEl, { direction = "rtl", maxAspect = 2.2 } = {})
     const rw = Math.min(w, r.x + r.w + pad) - x;
     const rh = Math.min(h, r.y + r.h + pad) - y;
     const natural = { x: x / scale, y: y / scale, w: rw / scale, h: rh / scale };
-    if (natural.h > natural.w * maxAspect) {
+    if (natural.h > natural.w * maxAspect && rw >= w * 0.25) {
       const shotH = natural.w * 1.5;
       const n = Math.ceil(natural.h / shotH);
       const step = (natural.h - shotH) / Math.max(1, n - 1);
-      for (let k = 0; k < n; k++) {
-        out.push({ x: natural.x, y: natural.y + k * step, w: natural.w, h: shotH, shot: true });
-      }
+      for (let k = 0; k < n; k++) out.push({ x: natural.x, y: natural.y + k * step, w: natural.w, h: shotH, shot: true });
     } else {
       out.push(natural);
     }
@@ -258,16 +350,12 @@ export function ocrBoxSpace(processedWidth, processedHeight) {
     w *= r;
     h *= r;
   }
-  return {
-    w: Math.max(Math.ceil(w / 32) * 32, 32),
-    h: Math.max(Math.ceil(h / 32) * 32, 32),
-  };
+  return { w: Math.max(Math.ceil(w / 32) * 32, 32), h: Math.max(Math.ceil(h / 32) * 32, 32) };
 }
 
 /**
  * Assign OCR paragraphs (natural coords, `{x,y,w,h,text}`) to panels and order
- * them in reading order inside each panel. Returns an array (one entry per panel)
- * of ordered paragraph arrays.
+ * them in reading order inside each panel. Returns one ordered array per panel.
  */
 export function assignTextToPanels(panels, paragraphs, direction = "rtl") {
   const buckets = panels.map(() => []);
@@ -286,10 +374,7 @@ export function assignTextToPanels(panels, paragraphs, direction = "rtl") {
         const dx = Math.max(r.x - cx, 0, cx - (r.x + r.w));
         const dy = Math.max(r.y - cy, 0, cy - (r.y + r.h));
         const d = dx * dx + dy * dy;
-        if (d < best) {
-          best = d;
-          idx = i;
-        }
+        if (d < best) { best = d; idx = i; }
       });
     }
     if (idx >= 0) buckets[idx].push(p);

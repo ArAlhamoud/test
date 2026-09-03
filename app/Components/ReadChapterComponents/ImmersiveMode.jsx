@@ -35,6 +35,7 @@ const DEFAULT_SETTINGS = {
   dwell: 4,                 // seconds on a panel with nothing to read
   framing: "normal",        // "tight" | "normal" | "wide"
   direction: "auto",        // "auto" | "rtl" | "ltr"
+  showPanels: false,        // debug: outline every detected panel
 };
 
 const GLIDE = "1.1s cubic-bezier(0.22, 0.9, 0.25, 1)";
@@ -881,6 +882,15 @@ export default function ImmersiveMode({
                 }}
               />
             )}
+            {camera && settings.showPanels && panels?.map((r, i) => (
+              <div
+                key={i}
+                className="absolute pointer-events-none"
+                style={{ left: r.x, top: r.y, width: r.w, height: r.h, border: `${Math.max(2, 3 / camera.s)}px solid ${i === panelIdx ? "#a78bfa" : "rgba(255,80,80,0.9)"}` }}
+              >
+                <span className="absolute left-1 top-1 px-1.5 rounded bg-black/70 font-bold" style={{ fontSize: Math.max(12, 18 / camera.s), color: i === panelIdx ? "#a78bfa" : "#ff6b6b" }}>{i + 1}</span>
+              </div>
+            ))}
           </div>
         </div>
       </div>
@@ -1165,6 +1175,7 @@ export default function ImmersiveMode({
               onChange={(v) => { updateSettings({ direction: v }); setImgReady(false); setPanelsByPage({}); }}
             />
             <Toggle label="Impact cuts on action panels (flash, shake, speed lines)" checked={settings.impactCuts} onChange={(v) => updateSettings({ impactCuts: v })} />
+            <Toggle label="Show detected panels (debug outlines)" checked={settings.showPanels} onChange={(v) => updateSettings({ showPanels: v })} />
           </Section>
 
           <Section title="Look">
