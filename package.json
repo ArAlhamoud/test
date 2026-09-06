@@ -26,7 +26,7 @@
     "gtts": "^0.2.1",
     "js-clipper": "^1.0.1",
     "lucide-react": "^0.509.0",
-    "next": "^15.3.0",
+    "next": "^15.5.25",
     "onnxruntime-web": "^1.18.1",
     "puppeteer-core": "^24.23.0",
     "react": "^19.0.0",
