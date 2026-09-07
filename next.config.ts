@@ -78,6 +78,19 @@ const nextConfig: NextConfig = {
   },
 
   webpack: (config, { isServer }) => {
+    if (!isServer) {
+      // kokoro-js / transformers.js reference Node built-ins behind runtime
+      // checks; stub them so the browser bundle resolves and takes the fetch path.
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        fs: false,
+        path: false,
+        "fs/promises": false,
+        crypto: false,
+        sharp: false,
+        "onnxruntime-node": false,
+      };
+    }
     if (isServer) {
       config.plugins.push(
         new CopyWebpackPlugin({

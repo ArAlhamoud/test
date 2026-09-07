@@ -13,10 +13,15 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   X, Play, Pause, SkipBack, SkipForward, ChevronLeft, ChevronRight, Settings,
   Volume2, VolumeX, Captions, CaptionsOff, Maximize2, Minimize2, Focus, Loader2,
-  HelpCircle, AlertTriangle, Film,
+  HelpCircle, AlertTriangle, Film, Sparkles,
 } from "lucide-react";
 import { detectPanels, ocrBoxSpace, assignTextToPanels } from "../../util/ReadChapterUtils/detectPanels";
 import { playWhoosh, playPageTurn } from "../../util/ReadChapterUtils/immersiveAudio";
+import {
+  loadNeuralVoice, isNeuralReady, synthesize, isCached, prefetch as prefetchVoice,
+  playClip, stopPlayback, unlockAudio, subscribeVoiceState,
+} from "../../util/ReadChapterUtils/neuralVoice";
+import { getChapterProgress, saveProgress } from "../../util/ReadChapterUtils/readingProgress";
 
 const SETTINGS_KEY = "immersiveModeSettings";
 export const IMMERSIVE_RESUME_KEY = "immersiveModeResume";
@@ -31,12 +36,29 @@ const DEFAULT_SETTINGS = {
   impactCuts: true,
   sfx: true,
   rate: 1,
-  voiceName: "",
+  engine: "system",         // "system" (browser voices) | "neural" (Kokoro)
+  voiceName: "",            // browser voice
+  neuralVoice: "af_heart",  // Kokoro voice
+  voicePrompted: false,     // has the natural-voice offer been answered?
   dwell: 4,                 // seconds on a panel with nothing to read
   framing: "normal",        // "tight" | "normal" | "wide"
   direction: "auto",        // "auto" | "rtl" | "ltr"
   showPanels: false,        // debug: outline every detected panel
 };
+
+/** A hand-picked subset of Kokoro's voices, best-rated first. */
+const NEURAL_VOICES = [
+  { id: "af_heart", label: "Heart — US female (warm)" },
+  { id: "af_bella", label: "Bella — US female (bright)" },
+  { id: "af_nicole", label: "Nicole — US female (soft)" },
+  { id: "am_michael", label: "Michael — US male" },
+  { id: "am_fenrir", label: "Fenrir — US male (deep)" },
+  { id: "am_puck", label: "Puck — US male (playful)" },
+  { id: "am_onyx", label: "Onyx — US male (low)" },
+  { id: "bf_emma", label: "Emma — UK female" },
+  { id: "bm_george", label: "George — UK male" },
+  { id: "bm_fable", label: "Fable — UK male (narrator)" },
+];
 
 const GLIDE = "1.1s cubic-bezier(0.22, 0.9, 0.25, 1)";
 const PUNCH = "0.55s cubic-bezier(0.34, 1.4, 0.64, 1)";
@@ -244,7 +266,10 @@ export default function ImmersiveMode({
   const [statusText, setStatusText] = useState("");
   const [fx, setFx] = useState({ type: "glide", key: 0 });
   const [speechIssue, setSpeechIssue] = useState("");   // "" | "not-allowed" | "silent" | other error
+  const [issueDismissed, setIssueDismissed] = useState(false);
   const [spokenCount, setSpokenCount] = useState(0);
+  const [voiceState, setVoiceState] = useState({ status: "idle", progress: 0, device: null, error: null });
+  const [resumeNote, setResumeNote] = useState("");
   const [noise] = useState(() => (typeof window !== "undefined" ? makeNoiseDataUrl() : ""));
 
   const stageRef = useRef(null);
@@ -254,6 +279,8 @@ export default function ImmersiveMode({
   const runIdRef = useRef(0);
   const uiTimerRef = useRef(null);
   const pendingLastPanelRef = useRef(false);
+  const resumePanelRef = useRef(null);
+  const resumedRef = useRef(false);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
 
@@ -299,6 +326,9 @@ export default function ImmersiveMode({
     try {
       window.sessionStorage.removeItem(IMMERSIVE_RESUME_KEY);
     } catch { /* ignore */ }
+    // Entering immersive mode required a click or key press, so the browser will
+    // let us create the audio context now rather than on some later tap.
+    unlockAudio();
     try {
       stageRef.current?.requestFullscreen?.().catch?.(() => {});
     } catch { /* ignore */ }
@@ -307,6 +337,7 @@ export default function ImmersiveMode({
       document.removeEventListener("fullscreenchange", onFs);
       if (document.fullscreenElement) document.exitFullscreen?.().catch?.(() => {});
       try {
+        stopPlayback();
         window.speechSynthesis?.cancel();
       } catch { /* ignore */ }
     };
@@ -336,6 +367,51 @@ export default function ImmersiveMode({
       if (window.speechSynthesis) window.speechSynthesis.onvoiceschanged = null;
     };
   }, [language]);
+
+  // Natural-voice engine status (download progress, GPU vs CPU, errors).
+  useEffect(() => subscribeVoiceState(setVoiceState), []);
+
+  useEffect(() => {
+    if (settings.engine === "neural" && settings.narration) loadNeuralVoice().catch(() => {});
+  }, [settings.engine, settings.narration]);
+
+  // Resume where this chapter was left off (unless the caller positioned us).
+  useEffect(() => {
+    if (resumedRef.current || !pages.length) return;
+    resumedRef.current = true;
+    if (startIndex > 0) return;
+    const saved = getChapterProgress(mangaInfo?.id, chapterInfo?.id);
+    if (saved && saved.page > 0 && saved.page < pages.length) {
+      resumePanelRef.current = saved.panel || 0;
+      setPageIdx(saved.page);
+      setResumeNote(`Resumed from page ${saved.page + 1}`);
+      setTimeout(() => setResumeNote(""), 5000);
+    }
+  }, [pages.length, startIndex, mangaInfo?.id, chapterInfo?.id]);
+
+  // Remember the position for next time.
+  useEffect(() => {
+    if (!mangaInfo?.id || !chapterInfo?.id || !pages.length) return;
+    saveProgress({
+      mangaId: mangaInfo.id,
+      mangaTitle: typeof mangaInfo.title === "string" ? mangaInfo.title : "",
+      cover: mangaInfo.coverImageUrl || "",
+      chapterId: chapterInfo.id,
+      chapterNum: chapterInfo.chapter || "",
+      chapterTitle: chapterInfo.title || "",
+      page: pageIdx,
+      panel: panelIdx,
+      totalPages: pages.length,
+      mode: "immersive",
+    });
+  }, [pageIdx, panelIdx, pages.length, mangaInfo, chapterInfo]);
+
+  // The warning about silent narration auto-clears; dismissing it hides it for good.
+  useEffect(() => {
+    if (!speechIssue) return;
+    const t = setTimeout(() => setSpeechIssue(""), 7000);
+    return () => clearTimeout(t);
+  }, [speechIssue]);
 
   const selectedVoice = useMemo(() => {
     if (!voices.length) return null;
@@ -373,6 +449,7 @@ export default function ImmersiveMode({
     setSubtitle("");
     runIdRef.current += 1;
     try {
+      stopPlayback();
       window.speechSynthesis?.cancel();
     } catch { /* ignore */ }
     if (!pendingLastPanelRef.current) setPanelIdx(0);
@@ -465,6 +542,9 @@ export default function ImmersiveMode({
         if (pendingLastPanelRef.current) {
           pendingLastPanelRef.current = false;
           setPanelIdx(rects.length - 1);
+        } else if (resumePanelRef.current != null) {
+          setPanelIdx(Math.min(resumePanelRef.current, rects.length - 1));
+          resumePanelRef.current = null;
         }
         setStatusText("");
         setImgReady(true);
@@ -473,6 +553,9 @@ export default function ImmersiveMode({
       if (pendingLastPanelRef.current) {
         pendingLastPanelRef.current = false;
         setPanelIdx(panelsByPage[url].length - 1);
+      } else if (resumePanelRef.current != null) {
+        setPanelIdx(Math.min(resumePanelRef.current, panelsByPage[url].length - 1));
+        resumePanelRef.current = null;
       }
       setImgReady(true);
     }
@@ -566,6 +649,7 @@ export default function ImmersiveMode({
   const exit = useCallback(() => {
     runIdRef.current += 1;
     try {
+      stopPlayback();
       window.speechSynthesis?.cancel();
     } catch { /* ignore */ }
     onExit?.(pageIdx);
@@ -577,6 +661,42 @@ export default function ImmersiveMode({
     setPlaying(false);
     setTimeout(() => setPlaying(true), 0);
   }, []);
+
+  // Generate the current panel's audio as soon as its text exists, so playback
+  // does not begin with a silent wait on slower machines.
+  useEffect(() => {
+    if (settings.engine !== "neural" || voiceState.status !== "ready" || !panelTexts) return;
+    const opts = { voice: settings.neuralVoice, speed: settings.rate };
+    (panelTexts[panelIdx] || []).slice(0, 3).forEach((p) => prefetchVoice(p.text, opts));
+  }, [settings.engine, settings.neuralVoice, settings.rate, voiceState.status, panelTexts, panelIdx]);
+
+  /**
+   * Speak one line. Uses the natural voice when it is loaded, and silently falls
+   * back to the browser voice so a missing model never blocks reading.
+   */
+  const speakLine = useCallback(async (text, alive = () => true) => {
+    const s = settingsRef.current;
+    if (s.engine === "neural" && isNeuralReady()) {
+      try {
+        const clip = await synthesize(text, { voice: s.neuralVoice, speed: s.rate });
+        if (!alive()) return { why: "cancelled" };
+        const why = await playClip(clip);
+        if (why === "end") return { why: "end", engine: "neural" };
+        // The browser is holding audio until the reader interacts with the page.
+        if (why === "suspended") return { why: "error", error: "not-allowed", engine: "neural" };
+        if (why !== "unsupported") return { why: "error", error: why, engine: "neural" };
+      } catch (err) {
+        console.warn("[neural voice] falling back to the browser voice:", err?.message || err);
+      }
+    }
+    let last = { why: "end" };
+    for (const chunk of splitForSpeech(text)) {
+      if (!alive()) return { why: "cancelled" };
+      last = await speakChunk(chunk, { voice: selectedVoice, lang: language, rate: s.rate });
+      if (last.why !== "end") break;
+    }
+    return { ...last, engine: "system" };
+  }, [selectedVoice, language]);
 
   /* ---------- playback loop ---------- */
   useEffect(() => {
@@ -596,35 +716,33 @@ export default function ImmersiveMode({
       if (settingsRef.current.sfx) playWhoosh(kind === "impact" ? 0.26 : 0.16);
       let spokeSomething = false;
       if (texts.length) {
-        for (const para of texts) {
+        for (let i = 0; i < texts.length; i++) {
+          const para = texts[i];
           if (!alive()) return;
           setSubtitle(para.text);
-          const chunks = splitForSpeech(para.text);
-          const startedAt = Date.now();
-          let engineDead = false;
-          for (const chunk of chunks) {
-            if (!alive()) return;
-            const r = await speakChunk(chunk, { voice: selectedVoice, lang: language, rate: settingsRef.current.rate });
-            if (r.why === "end") {
-              spokeSomething = true;
-            } else if (r.why === "error" && r.error === "not-allowed") {
-              setSpeechIssue("not-allowed");
-              engineDead = true;
-              break;
-            } else if (r.why === "nostart" || r.why === "unsupported" || r.why === "end-without-start" || r.why === "error") {
-              setSpeechIssue((prev) => prev || (r.why === "error" ? `error: ${r.error}` : "silent"));
-              engineDead = true; // skip the rest of this panel's audio; the next panel tries again
-              break;
-            }
+          // Synthesise what comes next while this line plays, so audio is ready in time.
+          if (settingsRef.current.engine === "neural") {
+            const opts = { voice: settingsRef.current.neuralVoice, speed: settingsRef.current.rate };
+            texts.slice(i + 1, i + 3).forEach((p) => prefetchVoice(p.text, opts));
+            (panelTexts?.[panelIdx + 1] || []).slice(0, 2).forEach((p) => prefetchVoice(p.text, opts));
           }
+          const startedAt = Date.now();
+          const s = settingsRef.current;
+          const waitingOnVoice = s.engine === "neural" && isNeuralReady() && !isCached(para.text, { voice: s.neuralVoice, speed: s.rate });
+          if (waitingOnVoice) setStatusText("Preparing the voice…");
+          const r = await speakLine(para.text, alive);
+          if (waitingOnVoice) setStatusText("");
           if (!alive()) return;
-          if (engineDead) {
-            // Engine isn't producing audio: give readers time to read the subtitle instead.
+          if (r.why === "end") {
+            spokeSomething = true;
+            await wait(220);
+          } else if (r.why !== "cancelled") {
+            if (r.error === "not-allowed") setSpeechIssue("not-allowed");
+            else setSpeechIssue((prev) => prev || (r.why === "error" ? `error: ${r.error}` : "silent"));
+            // No audio: leave the subtitle up long enough to read instead.
             const words = para.text.split(/\s+/).length;
             const elapsed = Date.now() - startedAt;
             await wait(Math.max(0, Math.min(6000, 900 + words * 260) - elapsed));
-          } else {
-            await wait(220);
           }
         }
         if (spokeSomething) {
@@ -644,6 +762,7 @@ export default function ImmersiveMode({
     return () => {
       if (runIdRef.current === myRun) runIdRef.current += 1;
       try {
+        stopPlayback();
         window.speechSynthesis?.cancel();
       } catch { /* ignore */ }
     };
@@ -711,6 +830,7 @@ export default function ImmersiveMode({
     const onKey = (e) => {
       const tag = e.target?.tagName?.toLowerCase();
       if (tag === "input" || tag === "select" || tag === "textarea") return;
+      unlockAudio();
       switch (e.key) {
         case "Escape":
           if (showHelp) setShowHelp(false);
@@ -818,6 +938,7 @@ export default function ImmersiveMode({
       onMouseMove={pokeUI}
       onTouchStart={pokeUI}
       onClick={() => {
+        unlockAudio();
         if (speechIssue === "not-allowed") {
           setSpeechIssue("");
           restartPanel();
@@ -936,16 +1057,53 @@ export default function ImmersiveMode({
         </div>
       )}
 
-      {/* Speech blocked banner */}
-      {speechIssue && settings.narration && !chapterEnd && (
-        <div className="absolute inset-x-0 top-[38%] flex justify-center pointer-events-none">
-          <div className="flex items-center gap-3 px-5 py-3 rounded-2xl bg-amber-500/15 backdrop-blur-md border border-amber-300/30 text-sm text-amber-100 max-w-lg text-center" style={{ animation: "imPulse 2s ease-in-out infinite" }}>
-            <AlertTriangle className="w-4 h-4 shrink-0" />
+      {/* Narration warning: small, out of the way, self-dismissing */}
+      {speechIssue && settings.narration && !issueDismissed && !chapterEnd && !titleCard && (
+        <div className="absolute left-3 z-30 max-w-[260px]" style={{ bottom: 92 + letterboxPx }} onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-start gap-2 px-3 py-2 rounded-xl bg-black/75 backdrop-blur-md border border-amber-300/25 text-[11px] leading-snug text-amber-100 shadow-lg" style={{ animation: "imFadeIn 0.3s ease-out" }}>
+            <AlertTriangle className="w-3.5 h-3.5 mt-px shrink-0" />
             <span>
-              {speechIssue === "not-allowed"
-                ? "Your browser blocked audio until you interact with the page. Click anywhere to start narration."
-                : "Narration isn't producing sound yet (subtitles still work). It keeps retrying; if it stays silent, pick another voice in Settings (S) and press Test voice."}
+              {speechIssue === "not-allowed" ? "Tap once to allow audio." : "No sound yet — subtitles still work. Try Settings (S) → Voice engine."}
             </span>
+            <button onClick={() => { setSpeechIssue(""); setIssueDismissed(true); }} className="text-white/40 hover:text-white shrink-0" title="Dismiss">
+              <X size={12} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Resumed-from-page note */}
+      {resumeNote && !titleCard && (
+        <div className="absolute left-3 z-30" style={{ bottom: 92 + letterboxPx + (speechIssue && !issueDismissed ? 52 : 0) }} onClick={(e) => e.stopPropagation()}>
+          <div className="px-3 py-2 rounded-xl bg-black/75 backdrop-blur-md border border-white/10 text-[11px] text-white/90 shadow-lg" style={{ animation: "imFadeIn 0.3s ease-out" }}>
+            {resumeNote} ·{" "}
+            <button onClick={() => { setResumeNote(""); setPageIdx(0); setPanelIdx(0); }} className="underline text-violet-300 hover:text-violet-200">
+              start over
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* One-time offer of the natural voice */}
+      {settings.narration && !settings.voicePrompted && settings.engine === "system" && spokenCount >= 1 && !chapterEnd && !titleCard && !showSettings && (
+        <div className="absolute inset-x-0 z-30 flex justify-center px-4" style={{ bottom: 92 + letterboxPx }} onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center gap-3 px-4 py-3 rounded-2xl bg-black/80 backdrop-blur-xl border border-violet-400/30 shadow-2xl max-w-md" style={{ animation: "imFadeIn 0.4s ease-out" }}>
+            <Sparkles className="w-5 h-5 text-violet-300 shrink-0" />
+            <div className="text-xs leading-snug">
+              <div className="font-semibold">Voice sounds robotic?</div>
+              <div className="text-white/60">Switch to a natural AI voice. One 90 MB download, then it works offline.</div>
+            </div>
+            <div className="flex flex-col gap-1 shrink-0">
+              <button
+                onClick={() => { unlockAudio(); updateSettings({ engine: "neural", voicePrompted: true }); loadNeuralVoice().catch(() => {}); }}
+                className="px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-xs font-semibold"
+              >
+                Use it
+              </button>
+              <button onClick={() => updateSettings({ voicePrompted: true })} className="px-3 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-[11px]">
+                Not now
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -954,7 +1112,7 @@ export default function ImmersiveMode({
       {titleCard && (
         <div
           className="absolute inset-0 flex flex-col items-center justify-center cursor-pointer overflow-hidden"
-          onClick={(e) => { e.stopPropagation(); setTitleCard(false); }}
+          onClick={(e) => { e.stopPropagation(); unlockAudio(); setTitleCard(false); }}
         >
           <div className="absolute inset-0 bg-center bg-cover" style={{ backgroundImage: cover ? `url("${cover}")` : undefined, filter: "blur(18px) brightness(0.35) saturate(1.4)", transform: "scale(1.2)" }} />
           <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/30 to-black/80" />
@@ -1140,8 +1298,51 @@ export default function ImmersiveMode({
           </div>
 
           <Section title="Narration">
-            <label className="block">
-              <span className="text-white/70 text-xs">Voice ({voices.length} available)</span>
+            <Segmented
+              label="Voice engine"
+              value={settings.engine}
+              options={[["system", "Browser"], ["neural", "Natural AI"]]}
+              onChange={(v) => {
+                unlockAudio();
+                updateSettings({ engine: v, voicePrompted: true });
+                if (v === "neural") loadNeuralVoice().catch(() => {});
+              }}
+            />
+
+            {settings.engine === "neural" && (
+              <div className="rounded-xl bg-white/5 border border-white/10 p-3 space-y-2">
+                {voiceState.status === "loading" && (
+                  <div className="text-xs text-white/70">
+                    Downloading the voice model… {voiceState.progress}%
+                    <div className="mt-1 h-1.5 rounded-full bg-white/10 overflow-hidden">
+                      <div className="h-full bg-violet-400 transition-all duration-300" style={{ width: `${voiceState.progress}%` }} />
+                    </div>
+                    <div className="mt-1 text-[10px] text-white/40">About 90 MB, once. The browser voice reads along until it is ready.</div>
+                  </div>
+                )}
+                {voiceState.status === "ready" && (
+                  <div className="text-xs text-emerald-300/90">Ready — running on {voiceState.device === "webgpu" ? "your GPU" : "CPU"}.</div>
+                )}
+                {voiceState.status === "error" && (
+                  <div className="text-xs text-amber-300">Could not load: {voiceState.error}. Using the browser voice.</div>
+                )}
+                <label className="block">
+                  <span className="text-white/70 text-xs">Natural voice</span>
+                  <select
+                    className="mt-1 w-full rounded-lg bg-white/10 border border-white/10 px-2 py-1.5 text-sm"
+                    value={settings.neuralVoice}
+                    onChange={(e) => updateSettings({ neuralVoice: e.target.value })}
+                  >
+                    {NEURAL_VOICES.map((v) => (
+                      <option key={v.id} value={v.id} className="text-black">{v.label}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            )}
+
+            <label className={`block ${settings.engine === "neural" ? "opacity-50" : ""}`}>
+              <span className="text-white/70 text-xs">Browser voice ({voices.length} available)</span>
               <div className="mt-1 flex gap-2">
                 <select
                   className="flex-1 min-w-0 rounded-lg bg-white/10 border border-white/10 px-2 py-1.5 text-sm"
@@ -1155,9 +1356,11 @@ export default function ImmersiveMode({
                 </select>
                 <button
                   onClick={async () => {
+                    unlockAudio();
                     setSpeechIssue("");
-                    setStatusText("Testing voice… (cloud voices can take a few seconds)");
-                    const r = await speakChunk("Immersive mode narration test. If you can hear this, narration works.", { voice: selectedVoice, lang: language, rate: settings.rate });
+                    setIssueDismissed(false);
+                    setStatusText("Testing voice…");
+                    const r = await speakLine("Immersive mode narration test. If you can hear this, narration works.");
                     setStatusText("");
                     if (r.why !== "end") setSpeechIssue(r.why === "error" ? `error: ${r.error}` : r.why === "nostart" ? "silent" : r.why);
                   }}
@@ -1194,7 +1397,8 @@ export default function ImmersiveMode({
           <Section title="Diagnostics">
             <div className="text-xs text-white/70 space-y-1 font-mono">
               <div>text detection: {ocr === "pending" ? "reading…" : ocr === "failed" ? `FAILED (${ocrErrors[currentUrl] || "unknown"})` : Array.isArray(ocr) ? `ok, ${ocr.length} bubbles` : settings.narration ? "not started" : "off"}</div>
-              <div>speech engine: {typeof window !== "undefined" && window.speechSynthesis ? `available, ${voices.length} voices` : "NOT supported"}{selectedVoice ? `, using "${selectedVoice.name}"` : ""}</div>
+              <div>voice engine: {settings.engine === "neural" ? `natural (${voiceState.status}${voiceState.device ? `, ${voiceState.device}` : ""}${voiceState.error ? `: ${voiceState.error}` : ""})` : "browser"}</div>
+              <div>browser speech: {typeof window !== "undefined" && window.speechSynthesis ? `available, ${voices.length} voices` : "NOT supported"}{selectedVoice ? `, using "${selectedVoice.name}"` : ""}</div>
               <div>speech status: {speechIssue ? `problem: ${speechIssue}` : spokenCount ? `ok (${spokenCount} panels spoken)` : "nothing spoken yet"}</div>
               <div>page source: {srcMode === "direct" ? "direct from MangaDex" : "via image optimizer"} · panels: {panelCount}</div>
             </div>

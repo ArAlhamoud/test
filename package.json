@@ -4,10 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev --turbopack",
+    "predev": "node scripts/copyOrtAssets.mjs",
+    "dev": "next dev",
+    "prebuild": "node scripts/copyOrtAssets.mjs",
     "build": "next build",
     "start": "next start",
-    "play": "next build && next start",
+    "play": "npm run build && next start",
     "lint": "next lint"
   },
   "dependencies": {
@@ -25,6 +27,7 @@
     "framer-motion": "^12.4.4",
     "gtts": "^0.2.1",
     "js-clipper": "^1.0.1",
+    "kokoro-js": "^1.2.1",
     "lucide-react": "^0.509.0",
     "next": "^15.5.25",
     "onnxruntime-web": "^1.18.1",

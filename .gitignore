@@ -67,3 +67,6 @@ tree.ps1
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# generated at build time by scripts/copyOrtAssets.mjs
+public/ort/

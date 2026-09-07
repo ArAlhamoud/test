@@ -65,10 +65,30 @@ Settings are remembered.
 white flash, shake, speed lines); panels with "!" get a punch-in; everything
 else glides. The 🎞 button toggles the cinematic look (letterbox + grain).
 
+### Voices
+
+Two engines, switchable in Settings (**S**) → Narration → **Voice engine**:
+
+- **Browser** (default): instant, no download, but on Windows the built-in
+  voices sound robotic. Edge's "... Online (Natural)" voices are the best of
+  these; pick one from the browser-voice list.
+- **Natural AI**: a neural voice (Kokoro) that runs on your own device. The
+  model downloads once (about 90 MB) and is then cached for offline use, with
+  ten voices to choose from. It uses your GPU when the browser offers WebGPU
+  (Chrome and Edge on desktop) and the processor otherwise. Lines are generated
+  a little ahead of playback so the reading flow stays smooth, and the browser
+  voice covers anything the model has not produced yet.
+
 **If narration is silent**, open Settings → Diagnostics. It shows whether the
 text detection (OCR) succeeded for the page and whether the browser's speech
 engine produced sound, and the reason when either failed. "Test voice" plays a
 sample sentence. If the browser blocked audio, a banner asks for one click.
+
+### Resume where you left off
+
+The page (and panel) you stopped on is remembered per chapter in your browser.
+Reopen the chapter and it picks up there; immersive mode shows a short
+"Resumed from page N · start over" note so you can jump back to the beginning.
 
 **Tips**
 - Use Chrome or Edge; Edge's "Natural" voices sound best. Pick the voice in the

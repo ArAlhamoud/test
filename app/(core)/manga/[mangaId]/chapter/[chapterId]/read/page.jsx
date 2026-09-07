@@ -15,6 +15,7 @@ import GOTONextChapterPopUpAtLastPage from '../../../../../../Components/ReadCha
 import SidebarSkeleton from '../../../../../../Components/Skeletons/ReadChapter/SidebarSkeleton'; // Adjust path as needed
 import ContentSkeleton from '../../../../../../Components/Skeletons/ReadChapter/ContentSkeleton'; // Adjust path as needed
 import ImmersiveMode, { IMMERSIVE_RESUME_KEY } from '../../../../../../Components/ReadChapterComponents/ImmersiveMode';
+import { getChapterProgress, saveProgress } from '../../../../../../util/ReadChapterUtils/readingProgress';
 
 const SideBar = memo(_SideBar);
 const MiddleImageAndOptions = memo(_MiddleImageAndOptions);
@@ -82,6 +83,36 @@ export default function ReadChapter() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [immersive]);
+
+  // Resume the page this chapter was left on, and keep saving as you read.
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    restoredRef.current = false;
+  }, [chapterId]);
+
+  useEffect(() => {
+    if (restoredRef.current || !pages || !chapterInfo || !selectedMemoManga?.id) return;
+    restoredRef.current = true;
+    const saved = getChapterProgress(selectedMemoManga.id, chapterId);
+    const total = (quality === 'low' ? pages?.chapter?.dataSaver?.length : pages?.chapter?.data?.length) || 0;
+    if (saved && saved.page > 0 && saved.page < total) setCurrentIndex(saved.page);
+  }, [pages, chapterInfo, selectedMemoManga?.id, chapterId, quality]);
+
+  useEffect(() => {
+    if (!pages || !chapterInfo || !selectedMemoManga?.id) return;
+    const total = (quality === 'low' ? pages?.chapter?.dataSaver?.length : pages?.chapter?.data?.length) || 0;
+    if (!total) return;
+    saveProgress({
+      mangaId: selectedMemoManga.id,
+      mangaTitle: typeof selectedMemoManga.title === 'string' ? selectedMemoManga.title : '',
+      cover: selectedMemoManga.coverImageUrl || '',
+      chapterId,
+      chapterNum: chapterInfo.chapter || '',
+      chapterTitle: chapterInfo.title || '',
+      page: currentIndex,
+      totalPages: total,
+    });
+  }, [currentIndex, pages, chapterInfo, selectedMemoManga, chapterId, quality]);
 
   const openImmersive = useCallback(() => setImmersive(true), []);
   const closeImmersive = useCallback((pageIndex) => {
