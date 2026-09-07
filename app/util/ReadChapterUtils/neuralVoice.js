@@ -108,7 +108,7 @@ function cacheKey(text, voice, speed) {
   return `${voice}|${speed}|${text}`;
 }
 
-const GENERATE_TIMEOUT_MS = 40000;
+const GENERATE_TIMEOUT_MS = 12000;
 
 /**
  * Synthesise a line (cached). Returns { data: Float32Array, sampleRate }.

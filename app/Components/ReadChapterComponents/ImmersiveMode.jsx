@@ -189,7 +189,7 @@ function speakChunk(text, { voice, lang, rate }) {
     u.onend = () => finish(started ? "end" : "end-without-start");
     u.onerror = (e) => finish("error", e?.error || "unknown");
     // Cloud-backed voices (Edge "Natural") may need several seconds before audio starts.
-    startGuard = setTimeout(() => finish("nostart"), speechProven ? 6000 : 12000);
+    startGuard = setTimeout(() => finish("nostart"), speechProven ? 6000 : 8000);
     try {
       const go = () => synth.speak(u);
       if (synth.speaking || synth.pending) {
@@ -270,6 +270,7 @@ export default function ImmersiveMode({
   const [spokenCount, setSpokenCount] = useState(0);
   const [voiceState, setVoiceState] = useState({ status: "idle", progress: 0, device: null, error: null });
   const [resumeNote, setResumeNote] = useState("");
+  const [neuralNote, setNeuralNote] = useState("");
   const [noise] = useState(() => (typeof window !== "undefined" ? makeNoiseDataUrl() : ""));
 
   const stageRef = useRef(null);
@@ -280,6 +281,8 @@ export default function ImmersiveMode({
   const uiTimerRef = useRef(null);
   const pendingLastPanelRef = useRef(false);
   const resumePanelRef = useRef(null);
+  const neuralFailRef = useRef(0);
+  const neuralOffRef = useRef(false);
   const resumedRef = useRef(false);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
@@ -372,8 +375,11 @@ export default function ImmersiveMode({
   useEffect(() => subscribeVoiceState(setVoiceState), []);
 
   useEffect(() => {
+    neuralFailRef.current = 0;
+    neuralOffRef.current = false;
+    setNeuralNote("");
     if (settings.engine === "neural" && settings.narration) loadNeuralVoice().catch(() => {});
-  }, [settings.engine, settings.narration]);
+  }, [settings.engine, settings.narration, settings.neuralVoice]);
 
   // Resume where this chapter was left off (unless the caller positioned us).
   useEffect(() => {
@@ -676,17 +682,26 @@ export default function ImmersiveMode({
    */
   const speakLine = useCallback(async (text, alive = () => true) => {
     const s = settingsRef.current;
-    if (s.engine === "neural" && isNeuralReady()) {
+    if (s.engine === "neural" && isNeuralReady() && !neuralOffRef.current) {
       try {
         const clip = await synthesize(text, { voice: s.neuralVoice, speed: s.rate });
         if (!alive()) return { why: "cancelled" };
         const why = await playClip(clip);
-        if (why === "end") return { why: "end", engine: "neural" };
+        if (why === "end") {
+          neuralFailRef.current = 0;
+          return { why: "end", engine: "neural" };
+        }
         // The browser is holding audio until the reader interacts with the page.
         if (why === "suspended") return { why: "error", error: "not-allowed", engine: "neural" };
         if (why !== "unsupported") return { why: "error", error: why, engine: "neural" };
       } catch (err) {
         console.warn("[neural voice] falling back to the browser voice:", err?.message || err);
+        // Too slow on this device: stop waiting on it for the rest of the session.
+        if (++neuralFailRef.current >= 2) {
+          neuralOffRef.current = true;
+          setNeuralNote("Natural voice is too slow on this device — using the browser voice. Change it in Settings (S).");
+          setTimeout(() => setNeuralNote(""), 9000);
+        }
       }
     }
     let last = { why: "end" };
@@ -1057,30 +1072,47 @@ export default function ImmersiveMode({
         </div>
       )}
 
-      {/* Narration warning: small, out of the way, self-dismissing */}
-      {speechIssue && settings.narration && !issueDismissed && !chapterEnd && !titleCard && (
-        <div className="absolute left-3 z-30 max-w-[260px]" style={{ bottom: 92 + letterboxPx }} onClick={(e) => e.stopPropagation()}>
-          <div className="flex items-start gap-2 px-3 py-2 rounded-xl bg-black/75 backdrop-blur-md border border-amber-300/25 text-[11px] leading-snug text-amber-100 shadow-lg" style={{ animation: "imFadeIn 0.3s ease-out" }}>
-            <AlertTriangle className="w-3.5 h-3.5 mt-px shrink-0" />
-            <span>
-              {speechIssue === "not-allowed" ? "Tap once to allow audio." : "No sound yet — subtitles still work. Try Settings (S) → Voice engine."}
-            </span>
-            <button onClick={() => { setSpeechIssue(""); setIssueDismissed(true); }} className="text-white/40 hover:text-white shrink-0" title="Dismiss">
-              <X size={12} />
-            </button>
-          </div>
-        </div>
-      )}
+      {/* Corner notes: informative, never covering the page */}
+      {!titleCard && !chapterEnd && (
+        <div className="absolute left-3 z-30 flex flex-col-reverse gap-2 max-w-[280px]" style={{ bottom: 92 + letterboxPx }} onClick={(e) => e.stopPropagation()}>
+          {speechIssue && settings.narration && !issueDismissed && (
+            <div className="flex items-start gap-2 px-3 py-2 rounded-xl bg-black/75 backdrop-blur-md border border-amber-300/25 text-[11px] leading-snug text-amber-100 shadow-lg" style={{ animation: "imFadeIn 0.3s ease-out" }}>
+              <AlertTriangle className="w-3.5 h-3.5 mt-px shrink-0" />
+              <span>{speechIssue === "not-allowed" ? "Tap once to allow audio." : "No sound yet — subtitles still work. Try Settings (S) → Voice engine."}</span>
+              <button onClick={() => { setSpeechIssue(""); setIssueDismissed(true); }} className="text-white/40 hover:text-white shrink-0" title="Dismiss">
+                <X size={12} />
+              </button>
+            </div>
+          )}
 
-      {/* Resumed-from-page note */}
-      {resumeNote && !titleCard && (
-        <div className="absolute left-3 z-30" style={{ bottom: 92 + letterboxPx + (speechIssue && !issueDismissed ? 52 : 0) }} onClick={(e) => e.stopPropagation()}>
-          <div className="px-3 py-2 rounded-xl bg-black/75 backdrop-blur-md border border-white/10 text-[11px] text-white/90 shadow-lg" style={{ animation: "imFadeIn 0.3s ease-out" }}>
-            {resumeNote} ·{" "}
-            <button onClick={() => { setResumeNote(""); setPageIdx(0); setPanelIdx(0); }} className="underline text-violet-300 hover:text-violet-200">
-              start over
-            </button>
-          </div>
+          {neuralNote && (
+            <div className="flex items-start gap-2 px-3 py-2 rounded-xl bg-black/75 backdrop-blur-md border border-white/15 text-[11px] leading-snug text-white/85 shadow-lg" style={{ animation: "imFadeIn 0.3s ease-out" }}>
+              <Sparkles className="w-3.5 h-3.5 mt-px shrink-0 text-violet-300" />
+              <span>{neuralNote}</span>
+            </div>
+          )}
+
+          {settings.narration && settings.engine === "neural" && voiceState.status === "loading" && (
+            <div className="px-3 py-2 rounded-xl bg-black/75 backdrop-blur-md border border-white/15 text-[11px] text-white/85 shadow-lg w-[240px]" style={{ animation: "imFadeIn 0.3s ease-out" }}>
+              <div className="flex items-center gap-2">
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-violet-300" />
+                <span>Natural voice downloading… {voiceState.progress}%</span>
+              </div>
+              <div className="mt-1.5 h-1 rounded-full bg-white/10 overflow-hidden">
+                <div className="h-full bg-violet-400 transition-all duration-300" style={{ width: `${voiceState.progress}%` }} />
+              </div>
+              <div className="mt-1 text-[10px] text-white/45">Reading continues with the browser voice.</div>
+            </div>
+          )}
+
+          {resumeNote && (
+            <div className="px-3 py-2 rounded-xl bg-black/75 backdrop-blur-md border border-white/10 text-[11px] text-white/90 shadow-lg" style={{ animation: "imFadeIn 0.3s ease-out" }}>
+              {resumeNote} ·{" "}
+              <button onClick={() => { setResumeNote(""); setPageIdx(0); setPanelIdx(0); }} className="underline text-violet-300 hover:text-violet-200">
+                start over
+              </button>
+            </div>
+          )}
         </div>
       )}
 
