@@ -6,6 +6,7 @@ import { NextResponse } from 'next/server';
 const CONFIG = {
   baseUrl: 'https://api.mangadex.org',
   fetchLimit: 100,
+  availableTranslatedLanguage: ['en'],
   includes: ['cover_art', 'author', 'artist', 'creator'],
 };
 

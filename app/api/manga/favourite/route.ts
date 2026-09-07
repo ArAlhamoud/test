@@ -13,6 +13,7 @@ export async function GET() {
       params: {
         limit,
         offset: 0,
+        availableTranslatedLanguage: ['en'],
         includes: ['cover_art', 'author', 'artist', 'creator'],
         order: { followedCount: 'desc' },
       },

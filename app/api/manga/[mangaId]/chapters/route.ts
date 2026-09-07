@@ -1,7 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextResponse } from 'next/server';
 import axios from 'axios';
-import { allAvailableLanguages } from '../../../../constants/Flags';
 
 const chaptersPerPage = 90; // Adjust the number of chapters per request
 const totalChaptersToFetch = 500; // Total chapters you want to fetch
@@ -23,7 +22,9 @@ export async function GET(
                 `https://api.mangadex.org/manga/${mangaId}/feed`,
                 {
                     params: {
-                        translatedLanguage: allAvailableLanguages,
+                        // English-only reader: keeps chapter lists clean and
+                        // means narration always matches the voices on offer.
+                        translatedLanguage: ['en'],
                         includes: [
                             'manga',
                             'scanlation_group',
@@ -43,7 +44,7 @@ export async function GET(
             // const included = response.data.included || [];
 
             console.log(
-                `Fetched ${fetchedChapters.length} chapters for languages: ${allAvailableLanguages.join(
+                `Fetched ${fetchedChapters.length} English chapters (${(['en']).join(
                     ', '
                 )}`
             );

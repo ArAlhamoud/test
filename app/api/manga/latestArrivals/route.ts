@@ -16,6 +16,7 @@ export async function GET() {
         params: {
           limit,
           offset: i * limit,
+          availableTranslatedLanguage: ['en'],
           includes: ['cover_art', 'author', 'artist', 'creator'],
           order: { createdAt: 'desc' },
         },

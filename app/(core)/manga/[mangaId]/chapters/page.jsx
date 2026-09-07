@@ -9,6 +9,7 @@ import { useChaptersFetch } from '../../../../hooks/useChaptersFetch';
 import { useTheme } from '@/app/providers/ThemeContext';
 import Link from 'next/link';
 import TabsAndSectionsSkeleton from '@/app/Components/Skeletons/MangaChapters/TabsAndSectionsSkeleton';
+import ContinueReading from '../../../../Components/ContinueReading';
 import dynamic from 'next/dynamic';
 
 export default function MangaChapters() {
@@ -83,6 +84,9 @@ export default function MangaChapters() {
   return (
     <div className="w-full relative z-20 min-h-screen -mt-20 overflow-hidden bg-transparent flex flex-col gap-12 text-white">
       <AboutManga isDark={isDark} chapters={chapters} manga={manga} handleChapterClick={handleChapterClick} />
+      <div className="px-2 sm:px-6 xl:px-16 -mt-6">
+        <ContinueReading mangaId={mangaId} isDark={isDark} />
+      </div>
       <TabsAndSections
         isDark={isDark}
         chapters={chapters}

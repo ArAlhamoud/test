@@ -6,6 +6,7 @@ import { NextResponse } from 'next/server';
 const CONFIG = {
   baseUrl: 'https://api.mangadex.org',
   fetchLimit: 100,
+  availableTranslatedLanguage: ['en'],
   includes: ['cover_art', 'author', 'artist', 'creator'],
   // ID of the list to read top manga from
   topListId: '864f1275-0048-4ffd-b6ee-bde52f3bc80b',

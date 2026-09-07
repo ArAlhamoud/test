@@ -7,6 +7,7 @@ const CONFIG = {
   baseUrl: 'https://api.mangadex.org',
   fetchLimit: 20,
   resultLimit: 10,
+  availableTranslatedLanguage: ['en'],
   includes: ['cover_art', 'author', 'artist', 'creator'],
   order: { rating: 'desc' }
 };

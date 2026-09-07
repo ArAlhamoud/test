@@ -9,6 +9,7 @@ import MangaCardSkeleton from '../../Components/Skeletons/MangaList/MangaCardSke
 import SliderComponentSkeleton from '../../Components/Skeletons/MangaList/SliderComponentSkeleton';
 import LatestActivityCommentsSkeleton from '../../Components/Skeletons/MangaList/LatestActivityCommentsSkeleton';
 import { useTheme } from '../../providers/ThemeContext';
+import ContinueReading from '../../Components/ContinueReading';
 
 
 export default function MangaListClient() {
@@ -57,6 +58,10 @@ const AsideComponent = dynamic(
         </Suspense>
       </div>
       
+      <div className="px-2 sm:px-6 xl:px-16 mt-4">
+        <ContinueReading isDark={isDark} />
+      </div>
+
       <div className="hidden px-6 xl:px-16 lg:block">
         <Suspense fallback={<LatestActivityCommentsSkeleton isDark={isDark} />}>
           <LatestActivityComments />

@@ -47,8 +47,13 @@ export default function ReadChapter() {
   const [selectedLanguage, setSelectedLanguage] = useState('');
 
   const scrollContainerRef = useRef(null);
-  const { selectedManga, getChapterListForManga, addToReadHistory } = useManga();
-  const selectedMemoManga = useMemo(() => selectedManga, [selectedManga])
+  const { selectedManga, setSelectedManga, getChapterListForManga, setChapterListForManga, addToReadHistory } = useManga();
+  // Only trust the stored manga when it is the one in the URL: opening the
+  // reader straight from a "continue reading" link may carry another series.
+  const selectedMemoManga = useMemo(
+    () => (selectedManga && selectedManga.id === mangaId ? selectedManga : null),
+    [selectedManga, mangaId]
+  )
   const chapters = useMemo(() => getChapterListForManga(mangaId), [getChapterListForManga, mangaId])
   const chapterInfo = useMemo(() => chapters.filter((x) => x.id == chapterId)[0], [chapterId, chapters]);
 
@@ -62,6 +67,43 @@ export default function ReadChapter() {
       setSelectedLanguage(chapterInfo.translatedLanguage);
     }
   }, [chapterInfo, selectedLanguage]);
+
+  // Deep links (continue reading, a shared URL, a reopened tab) may arrive with
+  // no manga or chapter list in storage: fetch whatever is missing.
+  useEffect(() => {
+    if (!mangaId || selectedMemoManga) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/manga/${mangaId}`);
+        if (!res.ok) return;
+        const json = await res.json();
+        const manga = json?.data?.[0];
+        if (manga && !cancelled) setSelectedManga(manga);
+      } catch (err) {
+        console.error('Could not load this manga:', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [mangaId, selectedMemoManga, setSelectedManga]);
+
+  useEffect(() => {
+    if (!mangaId || chapters?.length) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/manga/${mangaId}/chapters`);
+        if (!res.ok) return;
+        const json = await res.json();
+        if (Array.isArray(json?.chapters) && json.chapters.length && !cancelled) {
+          setChapterListForManga(mangaId, json.chapters);
+        }
+      } catch (err) {
+        console.error('Could not load the chapter list:', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [mangaId, chapters?.length, setChapterListForManga]);
 
   // Immersive mode: resume automatically after an auto "next chapter" jump, and open with the "I" key.
   useEffect(() => {
